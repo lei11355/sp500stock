@@ -1,0 +1,194 @@
+@model List<SP500StocksApp.Models.Stock>
+@{
+    ViewData["Title"] = "Live Quotes";
+}
+
+<h1>Real-Time S&P 500 Quotes</h1>
+<p class="text-muted">Click the <i class="fas fa-chart-line"></i> icon to view price history charts</p>
+
+<div class="table-responsive">
+    <table id="quotesTable" class="table table-striped table-hover">
+        <thead>
+            <tr>
+                <th style="width: 50px"></th>
+                <th>Symbol</th>
+                <th>Company</th>
+                <th>Sector</th>
+                <th>Price</th>
+                <th>Change</th>
+                <th>Change %</th>
+                <th>Volume</th>
+            </thead>
+        <tbody>
+            @foreach (var stock in Model)
+            {
+                <tr class="stock-row" data-symbol="@stock.Symbol" data-name="@stock.Name">
+                    <td class="text-center">
+                        <i class="fas fa-chart-line chart-icon" data-symbol="@stock.Symbol" data-name="@stock.Name"></i>
+                    </td>
+                    <td><strong>@stock.Symbol</strong></td>
+                    <td>@stock.Name</td>
+                    <td>@stock.Sector</td>
+                    <td>$@stock.Price.ToString("F2")</td>
+                    <td class="@(stock.Change >= 0 ? "positive" : "negative")">
+                        @(stock.Change >= 0 ? "+" : "")$@stock.Change.ToString("F2")
+                    </td>
+                    <td class="@(stock.ChangePercent >= 0 ? "positive" : "negative")">
+                        @(stock.ChangePercent >= 0 ? "+" : "")@stock.ChangePercent.ToString("F2")%
+                    </td>
+                    <td>@stock.Volume.ToString("N0")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@section Scripts {
+    <script>
+        // Store chart instances
+        const charts = {};
+        
+        $(document).ready(function() {
+            // Initialize DataTable
+            const table = $('#quotesTable').DataTable({
+                pageLength: 25,
+                order: [[1, 'asc']],
+                language: {
+                    search: "Search within results:"
+                }
+            });
+            
+            // Handle chart icon clicks
+            $('.chart-icon').click(async function() {
+                const symbol = $(this).data('symbol');
+                const companyName = $(this).data('name');
+                const $icon = $(this);
+                const $row = $icon.closest('tr');
+                
+                // Check if chart container already exists after this row
+                let $chartRow = $row.next('.chart-row');
+                
+                if ($chartRow.length === 0) {
+                    // Create loading indicator
+                    $chartRow = $(`
+                        <tr class="chart-row">
+                            <td colspan="8">
+                                <div class="chart-container active">
+                                    <div class="chart-header">
+                                        <strong>${companyName} (${symbol}) - 30 Day Price History</strong>
+                                        <i class="fas fa-times-circle close-chart"></i>
+                                    </div>
+                                    <div class="text-center py-4">
+                                        <div class="spinner-border text-primary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                        <p class="mt-2">Loading chart data for ${symbol}...</p>
+                                    </div>
+                                    <canvas id="chart-${symbol}" style="display: none;"></canvas>
+                                </div>
+                            </td>
+                        </tr>
+                    `);
+                    
+                    // Insert after current row
+                    $row.after($chartRow);
+                    
+                    // Fetch chart data
+                    try {
+                        const response = await fetch(`/Home/GetStockChart?symbol=${symbol}&days=30`);
+                        const data = await response.json();
+                        
+                        // Remove loading indicator and show canvas
+                        $chartRow.find('.spinner-border').parent().remove();
+                        const canvas = $chartRow.find(`#chart-${symbol}`);
+                        canvas.show();
+                        
+                        // Create chart
+                        const ctx = canvas[0].getContext('2d');
+                        charts[symbol] = new Chart(ctx, {
+                            type: 'line',
+                            data: {
+                                labels: data.dates,
+                                datasets: [{
+                                    label: 'Closing Price',
+                                    data: data.prices,
+                                    borderColor: 'rgb(54, 162, 235)',
+                                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                                    borderWidth: 2,
+                                    fill: true,
+                                    tension: 0.1,
+                                    pointRadius: 3,
+                                    pointHoverRadius: 6
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: true,
+                                plugins: {
+                                    tooltip: {
+                                        callbacks: {
+                                            label: function(context) {
+                                                return `$${context.raw.toFixed(2)}`;
+                                            }
+                                        }
+                                    },
+                                    legend: {
+                                        position: 'top'
+                                    }
+                                },
+                                scales: {
+                                    y: {
+                                        title: {
+                                            display: true,
+                                            text: 'Price (USD)',
+                                            font: { weight: 'bold' }
+                                        },
+                                        ticks: {
+                                            callback: function(value) {
+                                                return '$' + value.toFixed(2);
+                                            }
+                                        }
+                                    },
+                                    x: {
+                                        title: {
+                                            display: true,
+                                            text: 'Date',
+                                            font: { weight: 'bold' }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                        
+                    } catch (error) {
+                        $chartRow.find('.spinner-border').parent().html(
+                            '<div class="alert alert-danger">Error loading chart data. Please try again.</div>'
+                        );
+                    }
+                    
+                    // Handle close button
+                    $chartRow.find('.close-chart').click(function() {
+                        if (charts[symbol]) {
+                            charts[symbol].destroy();
+                            delete charts[symbol];
+                        }
+                        $chartRow.remove();
+                    });
+                    
+                } else {
+                    // Toggle existing chart
+                    const $container = $chartRow.find('.chart-container');
+                    if ($container.hasClass('active')) {
+                        $container.removeClass('active');
+                    } else {
+                        $container.addClass('active');
+                        // Refresh chart if needed
+                        if (charts[symbol]) {
+                            charts[symbol].update();
+                        }
+                    }
+                }
+            });
+        });
+    </script>
+}

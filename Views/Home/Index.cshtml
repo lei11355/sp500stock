@@ -1,0 +1,271 @@
+﻿@model List<SP500StocksApp.Models.SP500Constituent>
+@{
+    ViewData["Title"] = "S&P 500 Constituents";
+    var sectors = ViewBag.Sectors as List<string> ?? new List<string>();
+    var selectedSector = ViewBag.SelectedSector as string;
+    var searchString = ViewBag.SearchString as string;
+}
+
+<style>
+    .chart-icon {
+        cursor: pointer;
+        font-size: 1.2rem;
+        color: #007bff;
+        transition: color 0.2s;
+    }
+    .chart-icon:hover {
+        color: #0056b3;
+    }
+    .chart-container {
+        display: none;
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border-radius: 12px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    .chart-container.active {
+        display: block;
+    }
+    .chart-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #dee2e6;
+    }
+    .close-chart {
+        cursor: pointer;
+        font-size: 1.2rem;
+        color: #dc3545;
+    }
+    .close-chart:hover {
+        color: #a71d2a;
+    }
+    canvas {
+        max-height: 300px;
+        width: 100%;
+    }
+    .stock-row:hover {
+        background-color: #f8f9fa;
+    }
+</style>
+
+<h1>S&P 500 Index Constituents</h1>
+<p class="text-muted">Click the <i class="fas fa-chart-line"></i> icon to view 30-day price history</p>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label">Filter by Sector</label>
+                <select id="sectorFilter" class="form-select">
+                    <option value="">All Sectors (@Model.Count stocks)</option>
+                    @foreach (var sec in sectors)
+                    {
+                        if (selectedSector == sec)
+                        {
+                            <option value="@sec" selected>@sec</option>
+                        }
+                        else
+                        {
+                            <option value="@sec">@sec</option>
+                        }
+                    }
+                </select>
+            </div>
+
+            <div class="col-md-4">
+                <label class="form-label">Search by Symbol or Name</label>
+                <input type="text" id="searchInput" class="form-control" placeholder="e.g., Apple, AAPL, Microsoft..." value="@searchString" />
+            </div>
+
+            <div class="col-md-4 d-flex align-items-end">
+                <button id="applyFilters" class="btn btn-primary me-2">Apply Filters</button>
+                <button id="clearFilters" class="btn btn-secondary">Clear All</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(selectedSector))
+{
+    <div class="alert alert-info">
+        Showing <strong>@Model.Count</strong> stocks in <strong>@selectedSector</strong> sector
+    </div>
+}
+
+@if (!Model.Any())
+{
+    <div class="alert alert-warning">
+        No stocks found matching your filters.
+    </div>
+}
+else
+{
+    <div class="table-responsive">
+        <table id="sp500Table" class="table table-striped table-hover">
+            <thead>
+                <tr>
+                    <th style="width: 50px">Chart</th>
+                    <th>Symbol</th>
+                    <th>Company Name</th>
+                    <th>Sector</th>
+                    <th>Action</th>
+                </thead>
+            <tbody>
+                @foreach (var stock in Model)
+                {
+                    <tr class="stock-row" data-symbol="@stock.Symbol" data-name="@stock.Name">
+                        <td class="text-center">
+                            <i class="fas fa-chart-line chart-icon" 
+                               data-symbol="@stock.Symbol" 
+                               data-name="@stock.Name"></i>
+                        </td>
+                        <td><strong>@stock.Symbol</strong></td>
+                        <td>@stock.Name</td>
+                        <td><span class="badge bg-secondary">@stock.Sector</span></td>
+                        <td>
+                            <a href="@Url.Action("Search", "Home", new { symbol = stock.Symbol })" 
+                               class="btn btn-sm btn-primary">View Quote</a>
+                         </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@section Scripts {
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script>
+        // Store chart instances
+        const charts = {};
+        
+        $(document).ready(function() {
+            // Initialize DataTable
+            const table = $('#sp500Table').DataTable({
+                pageLength: 25,
+                order: [[1, 'asc']],
+                language: {
+                    search: "Search within results:"
+                }
+            });
+            
+            // Apply filters
+            $('#applyFilters').click(function() {
+                var sector = $('#sectorFilter').val();
+                var search = $('#searchInput').val();
+                var url = '@Url.Action("Index", "Home")';
+                var params = [];
+                if (sector) params.push('sector=' + encodeURIComponent(sector));
+                if (search) params.push('searchString=' + encodeURIComponent(search));
+                window.location.href = params.length > 0 ? url + '?' + params.join('&') : url;
+            });
+            
+            $('#clearFilters').click(function() {
+                window.location.href = '@Url.Action("Index", "Home")';
+            });
+            
+            $('#searchInput').keypress(function(e) {
+                if (e.which === 13) $('#applyFilters').click();
+            });
+            
+            // Handle chart icon clicks
+            $('.chart-icon').off('click').on('click', async function() {
+                const symbol = $(this).data('symbol');
+                const companyName = $(this).data('name');
+                const $row = $(this).closest('tr');
+                
+                // Check if chart row already exists
+                let $chartRow = $row.next('.chart-row');
+                
+                if ($chartRow.length === 0) {
+                    // Create loading indicator
+                    $chartRow = $(`
+                        <tr class="chart-row">
+                            <td colspan="5">
+                                <div class="chart-container active">
+                                    <div class="chart-header">
+                                        <strong>${companyName} (${symbol}) - 30 Day Price History</strong>
+                                        <i class="fas fa-times-circle close-chart"></i>
+                                    </div>
+                                    <div class="text-center py-4" id="loading-${symbol}">
+                                        <div class="spinner-border text-primary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                        <p class="mt-2">Loading chart data for ${symbol}...</p>
+                                    </div>
+                                    <canvas id="chart-${symbol}" style="display: none;"></canvas>
+                                </div>
+                            </td>
+                        </tr>
+                    `);
+                    
+                    $row.after($chartRow);
+                    
+                    try {
+                        const response = await fetch(`/Home/GetStockChart?symbol=${symbol}&days=30`);
+                        const data = await response.json();
+                        
+                        $(`#loading-${symbol}`).remove();
+                        const canvas = $(`#chart-${symbol}`);
+                        canvas.show();
+                        
+                        const ctx = canvas[0].getContext('2d');
+                        charts[symbol] = new Chart(ctx, {
+                            type: 'line',
+                            data: {
+                                labels: data.dates,
+                                datasets: [{
+                                    label: 'Closing Price',
+                                    data: data.prices,
+                                    borderColor: 'rgb(54, 162, 235)',
+                                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                                    borderWidth: 2,
+                                    fill: true,
+                                    tension: 0.1,
+                                    pointRadius: 3,
+                                    pointHoverRadius: 6
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: true,
+                                plugins: {
+                                    tooltip: {
+                                        callbacks: {
+                                            label: function(context) {
+                                                return `$${context.raw.toFixed(2)}`;
+                                            }
+                                        }
+                                    }
+                                },
+                                scales: {
+                                    y: {
+                                        title: { display: true, text: 'Price (USD)' },
+                                        ticks: { callback: (v) => '$' + v.toFixed(2) }
+                                    },
+                                    x: { title: { display: true, text: 'Date' } }
+                                }
+                            }
+                        });
+                    } catch (error) {
+                        $(`#loading-${symbol}`).html('<div class="alert alert-danger">Error loading chart data</div>');
+                    }
+                    
+                    $chartRow.find('.close-chart').click(function() {
+                        if (charts[symbol]) {
+                            charts[symbol].destroy();
+                            delete charts[symbol];
+                        }
+                        $chartRow.remove();
+                    });
+                } else {
+                    $chartRow.find('.chart-container').toggleClass('active');
+                    if (charts[symbol]) charts[symbol].update();
+                }
+            });
+        });
+    </script>
+}
